@@ -1,0 +1,198 @@
+name: Server premium hrgb
+
+on:
+  workflow_dispatch:
+
+jobs:
+  windows-server:
+    name: Server premium hrgb
+    runs-on: windows-latest
+    timeout-minutes: 360
+
+    env:
+      SERVER_USER: HRGBVNGM
+
+    steps:
+      # ==========================================
+      # STEP 1 - Kiểm tra hệ thống
+      # ==========================================
+      - name: 1. System information
+        shell: powershell
+        run: |
+          Write-Host "================================="
+          Write-Host " Server premium hrgb"
+          Write-Host " Powered by ngrok"
+          Write-Host "================================="
+          Write-Host ""
+          Write-Host "Windows:"
+          Get-CimInstance Win32_OperatingSystem |
+            Select-Object Caption, Version, OSArchitecture
+
+          Write-Host ""
+          Write-Host "CPU:"
+          Get-CimInstance Win32_Processor |
+            Select-Object Name, NumberOfCores
+
+          Write-Host ""
+          Write-Host "RAM:"
+          Get-CimInstance Win32_ComputerSystem |
+            Select-Object TotalPhysicalMemory
+
+      # ==========================================
+      # STEP 2 - Tạo password random
+      # ==========================================
+      - name: 2. Generate random password
+        id: password
+        shell: powershell
+        run: |
+          Add-Type -AssemblyName System.Web
+
+          $chars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789!@#$%^&*'
+          $password = -join (
+            1..24 | ForEach-Object {
+              $chars[(Get-Random -Maximum $chars.Length)]
+            }
+          )
+
+          "PASSWORD=$password" >> $env:GITHUB_ENV
+
+          Write-Host "User: HRGBVNGM"
+          Write-Host "Password: $password"
+
+      # ==========================================
+      # STEP 3 - Cấu hình user
+      # ==========================================
+      - name: 3. Configure user
+        shell: powershell
+        run: |
+          $securePassword = ConvertTo-SecureString `
+            $env:PASSWORD `
+            -AsPlainText `
+            -Force
+
+          $existing = Get-LocalUser -Name $env:SERVER_USER `
+            -ErrorAction SilentlyContinue
+
+          if ($existing) {
+            Set-LocalUser `
+              -Name $env:SERVER_USER `
+              -Password $securePassword
+          }
+          else {
+            New-LocalUser `
+              -Name $env:SERVER_USER `
+              -Password $securePassword `
+              -PasswordNeverExpires:$true `
+              -AccountNeverExpires:$true
+          }
+
+          Add-LocalGroupMember `
+            -Group "Users" `
+            -Member $env:SERVER_USER `
+            -ErrorAction SilentlyContinue
+
+      # ==========================================
+      # STEP 4 - Tải ngrok
+      # ==========================================
+      - name: 4. Install ngrok
+        shell: powershell
+        run: |
+          $url = "https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-windows-amd64.zip"
+          $zip = "$env:TEMP\ngrok.zip"
+          $dir = "$env:TEMP\ngrok"
+
+          Invoke-WebRequest `
+            -Uri $url `
+            -OutFile $zip
+
+          Expand-Archive `
+            -Path $zip `
+            -DestinationPath $dir `
+            -Force
+
+          "$dir" >> $env:GITHUB_PATH
+
+          Write-Host "ngrok installed."
+
+      # ==========================================
+      # STEP 5 - Cấu hình ngrok bằng SECRET
+      # ==========================================
+      - name: 5. Configure ngrok
+        shell: powershell
+        env:
+          NGROK_AUTHTOKEN: ${{ secrets.NGROK_AUTHTOKEN }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:NGROK_AUTHTOKEN)) {
+            throw "NGROK_AUTHTOKEN secret is missing."
+          }
+
+          ngrok config add-authtoken $env:NGROK_AUTHTOKEN
+
+          Write-Host "ngrok token configured."
+
+      # ==========================================
+      # STEP 6 - Hiển thị thông tin kết nối
+      # ==========================================
+      - name: 6. Start ngrok tunnel
+        shell: powershell
+        run: |
+          # Ví dụ tunnel TCP tới một dịch vụ đang chạy
+          Start-Process `
+            -FilePath "ngrok.exe" `
+            -ArgumentList "tcp 3389 --log=stdout" `
+            -WindowStyle Hidden
+
+          Start-Sleep -Seconds 5
+
+          Write-Host ""
+          Write-Host "================================="
+          Write-Host " ngrok status"
+          Write-Host "================================="
+
+          try {
+            $tunnel = Invoke-RestMethod `
+              -Uri "http://127.0.0.1:4040/api/tunnels"
+
+            $tunnel.tunnels |
+              Select-Object name, public_url
+          }
+          catch {
+            Write-Host "Could not read ngrok tunnel information."
+          }
+
+      # ==========================================
+      # STEP 7 - Giữ server chạy tối đa 6 giờ
+      # ==========================================
+      - name: 7. Keep server alive
+        shell: powershell
+        run: |
+          Write-Host ""
+          Write-Host "================================="
+          Write-Host " Server premium hrgb is running"
+          Write-Host " User: HRGBVNGM"
+          Write-Host " Max runtime: 6 hours"
+          Write-Host " Powered by ngrok"
+          Write-Host "================================="
+          Write-Host ""
+
+          $end = (Get-Date).AddHours(5.9)
+
+          while ((Get-Date) -lt $end) {
+            Write-Host "[$(Get-Date -Format 'HH:mm:ss')] Server is running..."
+            Start-Sleep -Seconds 60
+          }
+
+      # ==========================================
+      # STEP 8 - Dọn dẹp
+      # ==========================================
+      - name: 8. Cleanup
+        if: always()
+        shell: powershell
+        run: |
+          Get-Process ngrok `
+            -ErrorAction SilentlyContinue |
+            Stop-Process -Force `
+            -ErrorAction SilentlyContinue
+
+          Write-Host "ngrok stopped."
+          Write-Host "Server session ended."
