@@ -13,40 +13,42 @@ jobs:
       SERVER_USER: HRGBVNGM
 
     steps:
-      # ==========================================
-      # STEP 1 - Kiểm tra hệ thống
-      # ==========================================
-      - name: 1. System information
+
+      # =========================================================
+      # STEP 1 - SYSTEM INFORMATION
+      # =========================================================
+      - name: "01 - System Information"
         shell: powershell
         run: |
-          Write-Host "================================="
-          Write-Host " Server premium hrgb"
-          Write-Host " Powered by ngrok"
-          Write-Host "================================="
+          Clear-Host
+
+          Write-Host "╔══════════════════════════════════════════════════════╗"
+          Write-Host "║              SERVER PREMIUM HRGB                    ║"
+          Write-Host "║                 Powered by ngrok                    ║"
+          Write-Host "╚══════════════════════════════════════════════════════╝"
           Write-Host ""
-          Write-Host "Windows:"
+
+          Write-Host "🖥️  Operating System"
           Get-CimInstance Win32_OperatingSystem |
-            Select-Object Caption, Version, OSArchitecture
+            Select-Object Caption, Version, OSArchitecture |
+            Format-List
 
-          Write-Host ""
-          Write-Host "CPU:"
+          Write-Host "⚙️  CPU"
           Get-CimInstance Win32_Processor |
-            Select-Object Name, NumberOfCores
+            Select-Object Name, NumberOfCores, NumberOfLogicalProcessors |
+            Format-List
 
-          Write-Host ""
-          Write-Host "RAM:"
-          Get-CimInstance Win32_ComputerSystem |
-            Select-Object TotalPhysicalMemory
+          Write-Host "💾 Memory"
+          $ram = (Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory
+          Write-Host ("{0:N2} GB" -f ($ram / 1GB))
 
-      # ==========================================
-      # STEP 2 - Tạo password random
-      # ==========================================
-      - name: 2. Generate random password
+      # =========================================================
+      # STEP 2 - RANDOM PASSWORD
+      # =========================================================
+      - name: "02 - Generate Random Password"
         id: password
         shell: powershell
         run: |
-          Add-Type -AssemblyName System.Web
-
           $chars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789!@#$%^&*'
           $password = -join (
             1..24 | ForEach-Object {
@@ -56,13 +58,18 @@ jobs:
 
           "PASSWORD=$password" >> $env:GITHUB_ENV
 
-          Write-Host "User: HRGBVNGM"
-          Write-Host "Password: $password"
+          Write-Host ""
+          Write-Host "╔══════════════════════════════════════════════════════╗"
+          Write-Host "║                 LOGIN INFORMATION                   ║"
+          Write-Host "╠══════════════════════════════════════════════════════╣"
+          Write-Host "║ User     : $env:SERVER_USER"
+          Write-Host "║ Password : $password"
+          Write-Host "╚══════════════════════════════════════════════════════╝"
 
-      # ==========================================
-      # STEP 3 - Cấu hình user
-      # ==========================================
-      - name: 3. Configure user
+      # =========================================================
+      # STEP 3 - CREATE / CONFIGURE USER
+      # =========================================================
+      - name: "03 - Configure Windows User"
         shell: powershell
         run: |
           $securePassword = ConvertTo-SecureString `
@@ -70,129 +77,318 @@ jobs:
             -AsPlainText `
             -Force
 
-          $existing = Get-LocalUser -Name $env:SERVER_USER `
+          $user = Get-LocalUser `
+            -Name $env:SERVER_USER `
             -ErrorAction SilentlyContinue
 
-          if ($existing) {
-            Set-LocalUser `
-              -Name $env:SERVER_USER `
-              -Password $securePassword
-          }
-          else {
+          if ($null -eq $user) {
+
             New-LocalUser `
               -Name $env:SERVER_USER `
               -Password $securePassword `
-              -PasswordNeverExpires:$true `
-              -AccountNeverExpires:$true
+              -PasswordNeverExpires `
+              -AccountNeverExpires `
+              -Description "HRGB Premium Server User"
+
+            Write-Host "User created."
+
+          } else {
+
+            Set-LocalUser `
+              -Name $env:SERVER_USER `
+              -Password $securePassword
+
+            Write-Host "User password updated."
           }
 
+          # Add administrator privileges
           Add-LocalGroupMember `
-            -Group "Users" `
+            -Group "Administrators" `
             -Member $env:SERVER_USER `
             -ErrorAction SilentlyContinue
 
-      # ==========================================
-      # STEP 4 - Tải ngrok
-      # ==========================================
-      - name: 4. Install ngrok
+          # Add Remote Desktop permission
+          Add-LocalGroupMember `
+            -Group "Remote Desktop Users" `
+            -Member $env:SERVER_USER `
+            -ErrorAction SilentlyContinue
+
+          Write-Host "User configured successfully."
+
+      # =========================================================
+      # STEP 4 - ENABLE REMOTE DESKTOP
+      # =========================================================
+      - name: "04 - Enable Remote Desktop"
         shell: powershell
         run: |
-          $url = "https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-windows-amd64.zip"
-          $zip = "$env:TEMP\ngrok.zip"
-          $dir = "$env:TEMP\ngrok"
+
+          Write-Host "Enabling Remote Desktop..."
+
+          # Enable RDP
+          Set-ItemProperty `
+            -Path "HKLM:\System\CurrentControlSet\Control\Terminal Server" `
+            -Name "fDenyTSConnections" `
+            -Value 0
+
+          # Allow RDP through firewall
+          Enable-NetFirewallRule `
+            -DisplayGroup "Remote Desktop" `
+            -ErrorAction SilentlyContinue
+
+          # Make sure TermService is running
+          Set-Service `
+            -Name "TermService" `
+            -StartupType Automatic
+
+          Start-Service `
+            -Name "TermService" `
+            -ErrorAction SilentlyContinue
+
+          # Enable RDP network security configuration
+          Set-ItemProperty `
+            -Path "HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp" `
+            -Name "UserAuthentication" `
+            -Value 1
+
+          # Make sure RDP is listening
+          Start-Sleep -Seconds 3
+
+          Write-Host ""
+          Write-Host "✓ Remote Desktop enabled"
+          Write-Host "✓ Windows Firewall rule enabled"
+          Write-Host "✓ Remote Desktop Services started"
+
+      # =========================================================
+      # STEP 5 - VERIFY RDP
+      # =========================================================
+      - name: "05 - Verify Remote Desktop"
+        shell: powershell
+        run: |
+
+          Write-Host ""
+          Write-Host "Checking RDP service..."
+
+          $service = Get-Service TermService
+
+          Write-Host "TermService : $($service.Status)"
+
+          Write-Host ""
+          Write-Host "Checking port 3389..."
+
+          $listener = Get-NetTCPConnection `
+            -LocalPort 3389 `
+            -State Listen `
+            -ErrorAction SilentlyContinue
+
+          if ($listener) {
+            Write-Host "✓ RDP port 3389 is LISTENING"
+          }
+          else {
+            Write-Host "⚠ RDP port 3389 is not currently listening"
+          }
+
+      # =========================================================
+      # STEP 6 - INSTALL NGROK
+      # =========================================================
+      - name: "06 - Install ngrok"
+        shell: powershell
+        run: |
+
+          $ngrokDir = "$env:RUNNER_TEMP\ngrok"
+          $zipFile = "$env:RUNNER_TEMP\ngrok.zip"
+
+          New-Item `
+            -ItemType Directory `
+            -Path $ngrokDir `
+            -Force | Out-Null
+
+          Write-Host "Downloading ngrok..."
 
           Invoke-WebRequest `
-            -Uri $url `
-            -OutFile $zip
+            -Uri "https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-windows-amd64.zip" `
+            -OutFile $zipFile
 
           Expand-Archive `
-            -Path $zip `
-            -DestinationPath $dir `
+            -Path $zipFile `
+            -DestinationPath $ngrokDir `
             -Force
 
-          "$dir" >> $env:GITHUB_PATH
+          "$ngrokDir" >> $env:GITHUB_PATH
 
-          Write-Host "ngrok installed."
+          & "$ngrokDir\ngrok.exe" version
 
-      # ==========================================
-      # STEP 5 - Cấu hình ngrok bằng SECRET
-      # ==========================================
-      - name: 5. Configure ngrok
+      # =========================================================
+      # STEP 7 - CONFIGURE NGROK SECRET
+      # =========================================================
+      - name: "07 - Configure ngrok"
         shell: powershell
         env:
           NGROK_AUTHTOKEN: ${{ secrets.NGROK_AUTHTOKEN }}
         run: |
+
           if ([string]::IsNullOrWhiteSpace($env:NGROK_AUTHTOKEN)) {
-            throw "NGROK_AUTHTOKEN secret is missing."
+            Write-Error "NGROK_AUTHTOKEN Secret is missing."
+            exit 1
           }
 
           ngrok config add-authtoken $env:NGROK_AUTHTOKEN
 
-          Write-Host "ngrok token configured."
+          Write-Host "✓ ngrok authentication configured."
 
-      # ==========================================
-      # STEP 6 - Hiển thị thông tin kết nối
-      # ==========================================
-      - name: 6. Start ngrok tunnel
+      # =========================================================
+      # STEP 8 - START NGROK RDP TUNNEL
+      # =========================================================
+      - name: "08 - Start ngrok RDP Tunnel"
         shell: powershell
         run: |
-          # Ví dụ tunnel TCP tới một dịch vụ đang chạy
+
+          Write-Host ""
+          Write-Host "Starting ngrok TCP tunnel to RDP..."
+
           Start-Process `
             -FilePath "ngrok.exe" `
             -ArgumentList "tcp 3389 --log=stdout" `
             -WindowStyle Hidden
 
-          Start-Sleep -Seconds 5
+          Write-Host "Waiting for ngrok..."
+
+          $connected = $false
+
+          for ($i = 1; $i -le 20; $i++) {
+
+            Start-Sleep -Seconds 1
+
+            try {
+
+              $response = Invoke-RestMethod `
+                -Uri "http://127.0.0.1:4040/api/tunnels" `
+                -TimeoutSec 3
+
+              if ($response.tunnels.Count -gt 0) {
+                $connected = $true
+                break
+              }
+
+            } catch {}
+          }
+
+          if (-not $connected) {
+
+            Write-Host ""
+            Write-Host "ERROR: ngrok tunnel could not be started."
+            Write-Host ""
+
+            Get-Process ngrok `
+              -ErrorAction SilentlyContinue
+
+            exit 1
+          }
+
+          $tunnel = $response.tunnels |
+            Where-Object { $_.proto -eq "tcp" } |
+            Select-Object -First 1
+
+          $publicUrl = $tunnel.public_url
+
+          if ($publicUrl -match "tcp://(.+):(\d+)") {
+
+            $hostAddress = $matches[1]
+            $port = $matches[2]
+
+            "NGROK_HOST=$hostAddress" >> $env:GITHUB_ENV
+            "NGROK_PORT=$port" >> $env:GITHUB_ENV
+          }
 
           Write-Host ""
-          Write-Host "================================="
-          Write-Host " ngrok status"
-          Write-Host "================================="
+          Write-Host "✓ ngrok tunnel is ONLINE"
 
-          try {
-            $tunnel = Invoke-RestMethod `
-              -Uri "http://127.0.0.1:4040/api/tunnels"
-
-            $tunnel.tunnels |
-              Select-Object name, public_url
-          }
-          catch {
-            Write-Host "Could not read ngrok tunnel information."
-          }
-
-      # ==========================================
-      # STEP 7 - Giữ server chạy tối đa 6 giờ
-      # ==========================================
-      - name: 7. Keep server alive
+      # =========================================================
+      # STEP 9 - CONNECTION INFORMATION
+      # =========================================================
+      - name: "09 - Connection Information"
         shell: powershell
         run: |
+
+          Clear-Host
+
           Write-Host ""
-          Write-Host "================================="
-          Write-Host " Server premium hrgb is running"
-          Write-Host " User: HRGBVNGM"
-          Write-Host " Max runtime: 6 hours"
-          Write-Host " Powered by ngrok"
-          Write-Host "================================="
+          Write-Host "╔══════════════════════════════════════════════════════════╗"
+          Write-Host "║                                                          ║"
+          Write-Host "║              🚀 SERVER PREMIUM HRGB 🚀                  ║"
+          Write-Host "║                                                          ║"
+          Write-Host "║                    POWERED BY NGROK                     ║"
+          Write-Host "║                                                          ║"
+          Write-Host "╠══════════════════════════════════════════════════════════╣"
+          Write-Host "║                                                          ║"
+          Write-Host "║  STATUS        : 🟢 ONLINE                              ║"
+          Write-Host "║  RDP           : 🟢 ENABLED                             ║"
+          Write-Host "║  USER          : $env:SERVER_USER"
+          Write-Host "║  PASSWORD      : $env:PASSWORD"
+          Write-Host "║                                                          ║"
+          Write-Host "║  NGROK HOST    : $env:NGROK_HOST"
+          Write-Host "║  NGROK PORT    : $env:NGROK_PORT"
+          Write-Host "║                                                          ║"
+          Write-Host "║  RDP ADDRESS   : $env:NGROK_HOST`:$env:NGROK_PORT"
+          Write-Host "║                                                          ║"
+          Write-Host "║  MAX RUNTIME   : 6 HOURS                                ║"
+          Write-Host "║                                                          ║"
+          Write-Host "╚══════════════════════════════════════════════════════════╝"
+
+          Write-Host ""
+          Write-Host "📌 Remote Desktop:"
+          Write-Host "   Computer : $env:NGROK_HOST`:$env:NGROK_PORT"
+          Write-Host "   Username : $env:SERVER_USER"
+          Write-Host "   Password : $env:PASSWORD"
+          Write-Host ""
+
+      # =========================================================
+      # STEP 10 - KEEP SERVER ALIVE
+      # =========================================================
+      - name: "10 - Keep Server Alive"
+        shell: powershell
+        run: |
+
+          Write-Host ""
+          Write-Host "╔══════════════════════════════════════════════════════╗"
+          Write-Host "║             SERVER IS NOW RUNNING                   ║"
+          Write-Host "║                                                      ║"
+          Write-Host "║  Maximum runtime: 6 hours                            ║"
+          Write-Host "║  RDP: Enabled                                        ║"
+          Write-Host "║  ngrok: Connected                                    ║"
+          Write-Host "╚══════════════════════════════════════════════════════╝"
           Write-Host ""
 
           $end = (Get-Date).AddHours(5.9)
 
           while ((Get-Date) -lt $end) {
-            Write-Host "[$(Get-Date -Format 'HH:mm:ss')] Server is running..."
+
+            $remaining = $end - (Get-Date)
+
+            Write-Host (
+              "[{0}] 🟢 SERVER ONLINE | Remaining: {1:hh\:mm\:ss}" -f
+              (Get-Date -Format "HH:mm:ss"),
+              $remaining
+            )
+
             Start-Sleep -Seconds 60
           }
 
-      # ==========================================
-      # STEP 8 - Dọn dẹp
-      # ==========================================
-      - name: 8. Cleanup
+      # =========================================================
+      # STEP 11 - CLEANUP
+      # =========================================================
+      - name: "11 - Cleanup"
         if: always()
         shell: powershell
         run: |
+
+          Write-Host ""
+          Write-Host "Stopping ngrok..."
+
           Get-Process ngrok `
             -ErrorAction SilentlyContinue |
-            Stop-Process -Force `
+            Stop-Process `
+            -Force `
             -ErrorAction SilentlyContinue
 
-          Write-Host "ngrok stopped."
-          Write-Host "Server session ended."
+          Write-Host "✓ ngrok stopped."
+          Write-Host "✓ Server session ended."
